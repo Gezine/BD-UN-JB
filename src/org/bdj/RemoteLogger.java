@@ -4,7 +4,6 @@ import java.io.*;
 import java.net.*;
 import java.util.Vector;
 
-
 public class RemoteLogger {
     private int port;
     private int maxCached;

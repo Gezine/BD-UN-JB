@@ -9,10 +9,6 @@ import java.util.jar.Attributes;
 
 public class RemoteJarLoader implements Runnable {
     
-    public RemoteJarLoader() {
-        cleanupOldTempFiles();
-    }
-    
     public void run() {
         try {
             ServerSocket server = new ServerSocket(9025);
@@ -35,26 +31,27 @@ public class RemoteJarLoader implements Runnable {
     }
     
     private static void loadAndRunJar(Socket client) throws Exception {
-        File tempJar = File.createTempFile("received", ".jar");
-        tempJar.deleteOnExit();
+        String jarPath = "/download0/received.jar";
         
-        InputStream input = client.getInputStream();
-        FileOutputStream output = new FileOutputStream(tempJar);
+        InputStream inputStream = client.getInputStream();
         
-        byte[] buffer = new byte[8192];
-        int bytesRead;
-        int totalBytes = 0;
+        OutputStream outputStream = new FileOutputStream(jarPath);
+        
+        byte[] buf = new byte[8192];
+        int total = 0;
+        int read;
         
         Status.println("Receiving JAR...");
-        while ((bytesRead = input.read(buffer)) != -1) {
-            output.write(buffer, 0, bytesRead);
-            totalBytes += bytesRead;
+        while ((read = inputStream.read(buf)) > 0) {
+            outputStream.write(buf, 0, read);
+            total += read;
         }
         
-        output.close();
-        Status.println("JAR received: " + totalBytes + " bytes total");
+        outputStream.close();
+        inputStream.close();
+        Status.println("JAR received: " + total + " bytes total");
         
-        runJar(tempJar);
+        runJar(new File(jarPath));
     }
     
     private static void runJar(File jarFile) throws Exception {
@@ -93,30 +90,6 @@ public class RemoteJarLoader implements Runnable {
         mainMethod.invoke(null, new Object[]{new String[0]});
         
         Status.println(mainClassName + " execution completed");
-    }
-
-    private void cleanupOldTempFiles() {
-        try {
-            String tempDir = System.getProperty("java.io.tmpdir");
-            File tempFolder = new File(tempDir);
-            File[] files = tempFolder.listFiles();
-            
-            if (files != null) {
-                int cleanedCount = 0;
-                for (int i = 0; i < files.length; i++) {
-                    File file = files[i];
-                    if (file.getName().startsWith("received") && file.getName().endsWith(".jar")) {
-                        if (file.delete()) {
-                            cleanedCount++;
-                        }
-                    }
-                }
-                if (cleanedCount > 0) {
-                    Status.println("Cleaned up " + cleanedCount + " old temp JAR files");
-                }
-            }
-        } catch (Exception e) {
-            Status.println("Warning: Could not clean temp files: " + e.getMessage());
-        }
+        
     }
 }

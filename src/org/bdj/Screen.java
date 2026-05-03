@@ -13,7 +13,6 @@ import java.io.StringWriter;
 import java.util.StringTokenizer;
 import java.util.Vector;
 
-
 public class Screen extends Container {
     private static final long serialVersionUID = 0x4141414141414141L;
     private final Font FONT = new Font(null, Font.PLAIN, 17);
