@@ -6,6 +6,8 @@ import java.lang.*;
 import java.lang.reflect.*;
 
 import java.awt.BorderLayout;
+import java.awt.event.KeyListener;
+import java.awt.event.KeyEvent;
 import javax.tv.xlet.Xlet;
 import javax.tv.xlet.XletContext;
 import org.havi.ui.HScene;
@@ -22,6 +24,9 @@ public class InitXlet implements Xlet {
     private InternalJarLoader internalJarLoader;
     private Thread internalJarLoaderThread;
     private final String jarLoaderThreadName = "JarLoader";
+    private final KeyListener[] listeners = new KeyListener[1];
+    private final String poopsVersion = "1.4";
+    private volatile boolean loadInternalPoop = false;
     
     public void initXlet(XletContext context) {
         
@@ -60,18 +65,35 @@ public class InitXlet implements Xlet {
         
         // Add sanity check
         if (System.getSecurityManager() == null) {
-            
-            boolean UseInternalJar = false;
+            Status.println("Press [X] to load the internal poops " + poopsVersion);
+            try {
+                jarLoader = new RemoteJarLoader();
+                jarLoaderThread = new Thread(jarLoader, jarLoaderThreadName);
+                listeners[0] = new KeyListener() {
+                    public void keyPressed(KeyEvent e) {
+                        int keyCode = e.getKeyCode();
+                        // Press [X] to disrupt the remote loader
+                        if (keyCode == KeyEvent.VK_ENTER) {
+                            jarLoader.stop();
+                            jarLoaderThread.interrupt();
+                            scene.removeKeyListener(listeners[0]);
+                            loadInternalPoop = true;
+                        }
+                    }
+                    public void keyReleased(KeyEvent e) {}
+                    public void keyTyped(KeyEvent e) {}
+                };
+                scene.addKeyListener(listeners[0]);
+                scene.requestFocus();
+                jarLoaderThread.start();
+                jarLoaderThread.join();
+                Status.println("Remote JAR Loader stopped");
+            } catch (Throwable e) {
+                Status.printStackTrace("Loader startup failed", e);
+            }
 
-            if (!UseInternalJar) {
-                try {
-                    jarLoader = new RemoteJarLoader();
-                    jarLoaderThread = new Thread(jarLoader, jarLoaderThreadName);
-                    jarLoaderThread.start();
-                } catch (Throwable e) {
-                    Status.printStackTrace("Loader startup failed", e);
-                }
-            } else {
+            if (loadInternalPoop) {
+                Status.println("Loading internal poops");
                 try {
                     internalJarLoader = new InternalJarLoader();
                     internalJarLoaderThread = new Thread(internalJarLoader, jarLoaderThreadName);
@@ -79,6 +101,8 @@ public class InitXlet implements Xlet {
                 } catch (Throwable e) {
                     Status.printStackTrace("Loader startup failed", e);
                 }
+            } else {
+                scene.removeKeyListener(listeners[0]);
             }
             
         } else {

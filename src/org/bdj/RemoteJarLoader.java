@@ -8,26 +8,43 @@ import java.util.jar.Manifest;
 import java.util.jar.Attributes;
 
 public class RemoteJarLoader implements Runnable {
-    
+    private static volatile boolean shouldStop = false;
+    private ServerSocket server; 
     public void run() {
         try {
-            ServerSocket server = new ServerSocket(9025);
-            Status.println("JAR Loader listening on port 9025...");
+            server = new ServerSocket(9025);
+            server.setSoTimeout(100); // wake the server up intermittenly to check if the Loader should be stopped
+            Status.println("Remote JAR Loader listening on port 9025...");
             
-            while (true) {
-                Socket client = server.accept();
+            while (!shouldStop) {
                 try {
-                    loadAndRunJar(client);
-                } catch (Exception e) {
-                    Status.printStackTrace("Error processing JAR", e);
+                    Socket client = server.accept();
+                    if (shouldStop) {
+                        client.close();
+                        break;
+                    }
+                    
+                    try {
+                        loadAndRunJar(client);
+                    } catch (Exception e) {
+                        Status.printStackTrace("Error processing JAR", e);
+                    }
+                    
+                    client.close();
+                    Status.println("Waiting for next JAR on port 9025...");
+                } catch (SocketTimeoutException e) {
+                    // No client connected during the timeout window.
                 }
                 
-                client.close();
-                Status.println("Waiting for next JAR on port 9025...");
             }
         } catch (IOException e) {
             Status.printStackTrace("Server error", e);
         }
+    }
+
+    public void stop()
+    {
+        this.shouldStop = true;
     }
     
     private static void loadAndRunJar(Socket client) throws Exception {

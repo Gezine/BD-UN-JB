@@ -15,7 +15,7 @@ public class InternalJarLoader implements Runnable {
     
     public void run() {
         try {
-            runJar(new File("/disc/payload.jar"));
+            runJar(new File("/disc/poops_1.4.jar"));
         } catch (IOException e) {
             Status.printStackTrace("JarLoader error", e);
         } catch (Exception e) {
