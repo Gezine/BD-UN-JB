@@ -15,7 +15,7 @@ import java.io.*;
 
 public class Poops {
     
-    private static final String VERSION_STRING = "BD-J Poopsploit 1.7";
+    private static final String VERSION_STRING = "BD-J Poopsploit 1.8";
     
     private static final int KERNEL_PID = 0;
     
