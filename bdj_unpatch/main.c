@@ -163,12 +163,6 @@ file_copy(const char *src, const char *dst) {
 
 int
 main(void) {
-  if (nmount(iov_sysex, IOVEC_SIZE(iov_sysex), MNT_UPDATE)) {
-    notify("system_ex remount failed: %s", strerror(errno));
-    return 1;
-  }
-
-  // Check if entry already exists
   struct zip_t *zip = zip_open(JAR_PATH, 0, 'r');
   if (!zip) {
     notify("zip_open (read) failed: %s", strerror(errno));
@@ -184,22 +178,22 @@ main(void) {
     return 0;
   }
 
-  // Backup original
-  if (rename(JAR_PATH, JAR_BAK_PATH)) {
-    notify("rename failed: %s", strerror(errno));
+  // Only remount rw if we actually need to patch
+  if (nmount(iov_sysex, IOVEC_SIZE(iov_sysex), MNT_UPDATE)) {
+    notify("system_ex remount rw failed: %s", strerror(errno));
     return 1;
   }
 
-  // Copy backup to new jar
-  if (file_copy(JAR_BAK_PATH, JAR_PATH)) {
-    notify("file_copy failed: %s", strerror(errno));
+  if (file_copy(JAR_PATH, JAR_BAK_PATH)) {
+    notify("file_copy (backup) failed: %s", strerror(errno));
+    nmount(iov_sysex, IOVEC_SIZE(iov_sysex), MNT_UPDATE | MNT_RDONLY);
     return 1;
   }
 
-  // Append entry to new jar
   zip = zip_open(JAR_PATH, ZIP_DEFAULT_COMPRESSION_LEVEL, 'a');
   if (!zip) {
     notify("zip_open (append) failed: %s", strerror(errno));
+    nmount(iov_sysex, IOVEC_SIZE(iov_sysex), MNT_UPDATE | MNT_RDONLY);
     return 1;
   }
 
@@ -209,5 +203,12 @@ main(void) {
   zip_close(zip);
 
   notify("Patched bdjstack.jar");
+
+  // Lock partition back to ro
+  if (nmount(iov_sysex, IOVEC_SIZE(iov_sysex), MNT_UPDATE | MNT_RDONLY)) {
+    notify("system_ex remount ro failed: %s", strerror(errno));
+    return 1;
+  }
+
   return 0;
 }
