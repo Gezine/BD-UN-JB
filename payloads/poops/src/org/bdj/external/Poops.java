@@ -15,7 +15,7 @@ import java.io.*;
 
 public class Poops {
     
-    private static final String VERSION_STRING = "BD-J Poopsploit 1.8";
+    private static final String VERSION_STRING = "BD-J Poopsploit 1.9";
     
     private static final int KERNEL_PID = 0;
     
@@ -63,9 +63,9 @@ public class Poops {
     private static final int UIO_IOV_NUM = 0x14;
     private static final int MSG_IOV_NUM = 0x17;
     
-    private static final int IPV6_SOCK_NUM = 150;
-    private static final int IOV_THREAD_NUM = 4;
-    private static final int UIO_THREAD_NUM = 4;
+    private static final int IPV6_SOCK_NUM = 96;
+    private static final int IOV_THREAD_NUM = 8;
+    private static final int UIO_THREAD_NUM = 8;
     
     private static final int COMMAND_UIO_READ = 0;
     private static final int COMMAND_UIO_WRITE = 1;    
