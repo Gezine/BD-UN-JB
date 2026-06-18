@@ -63,9 +63,9 @@ public class Poops {
     private static final int UIO_IOV_NUM = 0x14;
     private static final int MSG_IOV_NUM = 0x17;
     
-    private static final int IPV6_SOCK_NUM = 96;
-    private static final int IOV_THREAD_NUM = 8;
-    private static final int UIO_THREAD_NUM = 8;
+    private static final int IPV6_SOCK_NUM = 120;
+    private static final int IOV_THREAD_NUM = 6;
+    private static final int UIO_THREAD_NUM = 6;
     
     private static final int COMMAND_UIO_READ = 0;
     private static final int COMMAND_UIO_WRITE = 1;    
